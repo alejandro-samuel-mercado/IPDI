@@ -136,8 +136,6 @@ class AppPDI:
         )
 
 
-
-
         boton_restaurar = tk.Button(
             barra,
             text="Restaurar original",
@@ -160,8 +158,6 @@ class AppPDI:
             side="left",
             padx=5
         )
-
-
 
 
         boton_guardar = tk.Button(
@@ -209,7 +205,6 @@ class AppPDI:
             expand=True,
             padx=5
         )
-
 
         titulo_entrada = tk.Label(
             panel_entrada,
@@ -317,8 +312,6 @@ class AppPDI:
         )
 
         
-
-
 
         # ----------------------------------------------------
         # PANEL DERECHO - PROCESADA
