@@ -1,609 +1,596 @@
-"""
-Interfaz Gráfica - TP4 
-Grupo 3
-Integrantes:
-   FLORES, HERNAN
-   GUZMAN, ARMIN
-   MERCADO, ALEJANDRO
-"""
-
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
+
 import numpy as np
 from PIL import Image, ImageTk
-import matplotlib
-matplotlib.use("TkAgg")
-
-# --------- Funciones de Conversión de Espacio de Color ----------------
 
 
-def RGB_2_YIQ(rgb):
-    yiq = np.zeros(rgb.shape)
-    yiq[:, :, 0] = 0.229*rgb[:, :, 0] + 0.587*rgb[:, :, 1] + 0.114*rgb[:, :, 2]
-    yiq[:, :, 1] = 0.595716*rgb[:, :, 0] - \
-        0.274453*rgb[:, :, 1] - 0.321263*rgb[:, :, 2]
-    yiq[:, :, 2] = 0.211456*rgb[:, :, 0] - \
-        0.522591*rgb[:, :, 1] + 0.311135*rgb[:, :, 2]
-    return yiq
+COLOR_FONDO = "#E8EEF5"
+COLOR_PANEL = "#F8FAFC"
+COLOR_CONTROLES = "#EEF3F8"
+COLOR_IMAGEN = "#DCE4EE"
+COLOR_PRIMARIO = "#2563EB"
+COLOR_HOVER = "#1D4ED8"
+COLOR_TEXTO = "#1E293B"
+COLOR_SECUNDARIO = "#64748B"
+COLOR_BORDE = "#CBD5E1"
+COLOR_BLANCO = "#FFFFFF"
 
 
-def YIQ_2_RGB(yiq):
-    rgb = np.zeros(yiq.shape)
-    rgb[:, :, 0] = yiq[:, :, 0] + 0.9663 * yiq[:, :, 1] + 0.6210 * yiq[:, :, 2]
-    rgb[:, :, 1] = yiq[:, :, 0] - 0.2721 * yiq[:, :, 1] - 0.6474 * yiq[:, :, 2]
-    rgb[:, :, 2] = yiq[:, :, 0] - 1.1070 * yiq[:, :, 1] + 1.7046 * yiq[:, :, 2]
-    return rgb
+# ============================================================
+# FUNCIONES DE CONVOLUCIÓN Y CONSTRUCCIÓN DE KERNELS
+# ============================================================
 
-# --------- Función Externa  -------------------
+def rgb_a_luminancia(imagen_rgb):
+    """Obtiene la luminancia Y de una imagen RGB normalizada entre 0 y 1."""
+    imagen_rgb = np.asarray(imagen_rgb, dtype=float)
+    if imagen_rgb.ndim == 2:
+        return imagen_rgb.copy()
 
-
-def _convolution(image, kernel=np.ones((1, 1))):
-    convolved = np.zeros((np.array(image.shape)-np.array(kernel.shape)+1))
-    for x in range(convolved.shape[0]):
-        for y in range(convolved.shape[1]):
-            convolved[x, y] = (
-                image[x:x+kernel.shape[0], y:y+kernel.shape[1]]*kernel).sum()
-    return convolved
+    rojo = imagen_rgb[:, :, 0]
+    verde = imagen_rgb[:, :, 1]
+    azul = imagen_rgb[:, :, 2]
+    return 0.299 * rojo + 0.587 * verde + 0.114 * azul
 
 
-def kernel_pasa_bajo_llano(tamano):
-    if tamano not in [3, 5, 7]:
-        print("Error: El tamaño debe ser 3, 5 o 7.")
-        return None
-    matriz_unos = np.ones((tamano, tamano), dtype=np.float32)
-    kernel = matriz_unos / (tamano * tamano)
-    return kernel
+def convolucion(imagen, kernel):
+  
+    imagen = np.asarray(imagen, dtype=float)
+    kernel = np.asarray(kernel, dtype=float)
 
+    if imagen.ndim != 2:
+        raise ValueError("La convolución debe recibir una imagen de un solo canal.")
+    if kernel.ndim != 2 or kernel.shape[0] % 2 == 0 or kernel.shape[1] % 2 == 0:
+        raise ValueError("El kernel debe ser una matriz de dimensiones impares.")
 
-def kernel_bartlett(s=3):
-    a = (s+1)//2-np.abs(np.arange(s)-s//2)
-    k = np.outer(a, a.T)
-    return k / k.sum()
+    alto, ancho = imagen.shape
+    borde_y = kernel.shape[0] // 2
+    borde_x = kernel.shape[1] // 2
+    ampliada = np.pad(imagen, ((borde_y, borde_y), (borde_x, borde_x)), mode="edge")
+    resultado = np.zeros((alto, ancho), dtype=float)
 
-
-def kernel_gaussiano(nro):
-    if nro == 3:
-        v = np.array([1, 2, 1])
-    elif nro == 5:
-        v = np.array([1, 4, 6, 4, 1])
-    else:
-        v = np.array([1, 6, 15, 20, 15, 6, 1])
-
-    # Producto externo para generar la matriz de numeradores
-    numeradores = v[:, None] * v
-
-    # Calculamos la suma total de la matriz automáticamente
-    suma_total = numeradores.sum()
-
-    # Dividir entre la suma total para normalizar la matriz
-    kernel = numeradores / suma_total
-
-    return kernel
-
-
-def kernel_laplaciano(vecinos):
-    if vecinos == 4:
-        return np.array([
-            [0, -1,  0],
-            [-1, 4, -1],
-            [0, -1,  0]
-        ])
-    return np.array([
-        [-1, -1, -1],
-        [-1,  8, -1],
-        [-1, -1, -1]
-    ])
-
-
-def kernel_direccional(direccion):
-    # Kernel base (Oeste)
-    oeste = np.array([
-        [-1, 0, 1],
-        [-2, 0, 2],
-        [-1, 0, 1]
-    ])
-
-    # Kernel base diagonal (Suroeste) para derivar las demás diagonales
-    suroeste = np.array([
-        [0,  1,  2],
-        [-1,  0,  1],
-        [-2, -1,  0]
-    ])
-
-    match direccion.strip().lower():
-        case "oeste":
-            return oeste
-        case "este":
-            return np.fliplr(oeste)          # Inversión horizontal
-        case "norte":
-            return oeste.T                   # Transpuesta
-        case "sur":
-            # Inversión vertical de la transpuesta
-            return np.flipud(oeste.T)
-        case "suroeste":
-            return suroeste
-        case "sureste":
-            return np.fliplr(suroeste)       # Inversión horizontal de Suroeste
-        case "noroeste":
-            return np.flipud(suroeste)       # Inversión vertical de Suroeste
-        case "noreste":
-            return np.fliplr(np.flipud(suroeste))  # Combinación de inversiones
-
-
-def kernel_mejora(valor_mezcla):
-    # Definir el kernel identidad de 3x3
-    kernel_identidad = np.array([
-        [0, 0, 0],
-        [0, 1, 0],
-        [0, 0, 0]
-    ], dtype=np.float32)
-
-    # Obtener el kernel laplaciano de 8 vecinos
-    kernel_lapac_8vecinos = kernel_laplaciano(8)
-
-    # Calcular el kernel combinando la identidad y el laplaciano escalado por el valor del slider
-    kernel_mejora_ = kernel_identidad + valor_mezcla * kernel_lapac_8vecinos
-    return kernel_mejora_
-
-
-def agregar_ceros_gaus3x3(gaus3x3):
-    # Agregar filas arriba y abajo (de ceros)
-    fila_ceros = np.array([[0.0, 0.0, 0.0]])
-    # Convierte la matriz de 3x3 a 5x3
-    paso_1 = np.vstack((fila_ceros, gaus3x3, fila_ceros))
-
-    # Agregar columnas a los lados (de ceros)
-    columna_ceros = np.array([[0.0, 0.0, 0.0, 0.0, 0.0]]).T
-    matriz_final = np.hstack(
-        (columna_ceros, paso_1, columna_ceros))  # Convierte a 5x5
-
-    return matriz_final
-
-
-def kernel_pasabanda():
-    return kernel_gaussiano(5) - agregar_ceros_gaus3x3(kernel_gaussiano(3))
-
-
-def duplicar_bordes(Y, borde):
-    # Copia las primeras y últimas 'borde' filas completas
-    primeras_filas = Y[:borde, :]
-    ultimas_filas = Y[-borde:, :]
-
-    # Concatenar verticalmente
-    matriz_filas = np.vstack((primeras_filas, Y, ultimas_filas))
-
-    # Copia las primeras y últimas 'borde' columnas de la matriz resultante
-    primeras_cols = matriz_filas[:, :borde]
-    ultimas_cols = matriz_filas[:, -borde:]
-
-    # Concatenar horizontalmente
-    resultado = np.hstack((primeras_cols, matriz_filas, ultimas_cols))
+    # Cada valor del kernel multiplica la zona correspondiente de la imagen.
+    for fila in range(kernel.shape[0]):
+        for columna in range(kernel.shape[1]):
+            zona = ampliada[fila:fila + alto, columna:columna + ancho]
+            resultado += zona * kernel[fila, columna]
 
     return resultado
 
 
-def dibujar_histograma(canal_y, frame_destino, etiqueta_eje_x="Valor de intensidad (Y)", is_placeholder=False):
-    """Dibuja un histograma en barras """
-    for widget in frame_destino.winfo_children():
-        widget.destroy()
-
-    if is_placeholder:
-        lbl = tk.Label(frame_destino, text="histograma procesada",
-                       bg="#e8edf2", fg="#555555")
-        lbl.pack(expand=True, fill="both")
-        return
-
-    # Ajustado al tamaño de caja
-    fig, ax = plt.subplots(figsize=(4.7, 4.4), dpi=100)
-
-    # Estilo de histograma en barras
-    ax.hist(canal_y.ravel(), bins=40, color='dimgray',
-            edgecolor='black', alpha=0.8)
-    ax.set_xlabel(etiqueta_eje_x, fontsize=7)
-    ax.set_ylabel('Frecuencia', fontsize=7)
-
-    ax.grid(axis='y', linestyle='--', alpha=0.7)
-    ax.tick_params(axis='both', labelsize=7)
-
-    fig.tight_layout()
-
-    canvas = FigureCanvasTkAgg(fig, master=frame_destino)
-    canvas.draw()
-    canvas.get_tk_widget().pack(fill="both", expand=True)
-
-    plt.close(fig)
-# ---------------------------------------------------
+def kernel_identidad(tamanio=3):
+    kernel = np.zeros((tamanio, tamanio), dtype=float)
+    kernel[tamanio // 2, tamanio // 2] = 1.0
+    return kernel
 
 
-class AppTP4:
+def kernel_plano(tamanio=3):
+    """Filtro pasa bajos: todos los coeficientes tienen el mismo peso."""
+    if tamanio not in (3, 5, 7):
+        raise ValueError("El tamaño del kernel plano debe ser 3, 5 o 7.")
+    return np.ones((tamanio, tamanio), dtype=float) / (tamanio * tamanio)
+
+
+def kernel_bartlett(tamanio=3):
+    """Filtro pasa bajos triangular de Bartlett, normalizado para sumar 1."""
+    if tamanio not in (3, 5, 7):
+        raise ValueError("El tamaño del kernel Bartlett debe ser 3, 5 o 7.")
+    centro = tamanio // 2
+    vector = np.array([centro + 1 - abs(i - centro) for i in range(tamanio)], dtype=float)
+    kernel = np.outer(vector, vector)
+    return kernel / kernel.sum()
+
+
+def kernel_gaussiano(tamanio=5):
+    """Aproximación gaussiana usando coeficientes binomiales."""
+    vectores = {
+        3: [1, 2, 1],
+        5: [1, 4, 6, 4, 1],
+        7: [1, 6, 15, 20, 15, 6, 1]
+    }
+    if tamanio not in vectores:
+        raise ValueError("El tamaño del kernel gaussiano debe ser 3, 5 o 7.")
+
+    vector = np.array(vectores[tamanio], dtype=float)
+    kernel = np.outer(vector, vector)
+    return kernel / kernel.sum()
+
+
+def kernel_laplaciano(vecinos=4):
+    """Kernel para resaltar variaciones bruscas de intensidad."""
+    if vecinos == 4:
+        return np.array([[0, -1, 0], [-1, 4, -1], [0, -1, 0]], dtype=float)
+    if vecinos == 8:
+        return np.array([[-1, -1, -1], [-1, 8, -1], [-1, -1, -1]], dtype=float)
+    raise ValueError("El Laplaciano admite 4 u 8 vecinos.")
+
+
+def kernel_sobel_direccional(direccion):
+    """Devuelve uno de los ocho kernels direccionales usados en el segundo código."""
+    oeste = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=float)
+    suroeste = np.array([[0, 1, 2], [-1, 0, 1], [-2, -1, 0]], dtype=float)
+    direccion = direccion.strip().lower()
+
+    kernels = {
+        "oeste": oeste,
+        "este": np.fliplr(oeste),
+        "norte": oeste.T,
+        "sur": np.flipud(oeste.T),
+        "suroeste": suroeste,
+        "sureste": np.fliplr(suroeste),
+        "noroeste": np.flipud(suroeste),
+        "noreste": np.fliplr(np.flipud(suroeste))
+    }
+    if direccion not in kernels:
+        raise ValueError("Dirección Sobel no reconocida.")
+    return kernels[direccion].copy()
+
+
+def ajustar_kernel(kernel, tamanio):
+    """Centra un kernel pequeño en una matriz mayor rellenando con ceros."""
+    kernel = np.asarray(kernel, dtype=float)
+    if kernel.shape == (tamanio, tamanio):
+        return kernel.copy()
+    if kernel.shape[0] > tamanio or kernel.shape[1] > tamanio:
+        raise ValueError("No se puede ajustar este kernel al tamaño elegido.")
+
+    diferencia_filas = tamanio - kernel.shape[0]
+    diferencia_columnas = tamanio - kernel.shape[1]
+    arriba = diferencia_filas // 2
+    izquierda = diferencia_columnas // 2
+    return np.pad(
+        kernel,
+        ((arriba, diferencia_filas - arriba),
+         (izquierda, diferencia_columnas - izquierda)),
+        mode="constant"
+    )
+
+
+def kernel_pasabanda():
+    gaussiano_5 = kernel_gaussiano(5)
+    gaussiano_3 = ajustar_kernel(kernel_gaussiano(3), 5)
+    return gaussiano_5 - gaussiano_3
+
+
+def kernel_pasaaltos(peso=0.2):
+    """Realce de detalles: identidad más un Laplaciano V8 ponderado."""
+    if not 0 <= peso <= 1:
+        raise ValueError("El peso del pasaaltos debe estar entre 0 y 1.")
+    return kernel_identidad(3) + peso * kernel_laplaciano(8)
+
+
+def obtener_kernel(nombre, tamanio=3):
+    """Construye el kernel indicado para aplicar o combinar filtros."""
+    if nombre == "Identidad":
+        return kernel_identidad(tamanio)
+    if nombre == "Plano":
+        return kernel_plano(tamanio)
+    if nombre == "Bartlett":
+        return kernel_bartlett(tamanio)
+    if nombre == "Gaussiano":
+        return kernel_gaussiano(tamanio)
+    if nombre == "Laplaciano V4":
+        return ajustar_kernel(kernel_laplaciano(4), tamanio)
+    if nombre == "Laplaciano V8":
+        return ajustar_kernel(kernel_laplaciano(8), tamanio)
+    if nombre.startswith("Sobel "):
+        return ajustar_kernel(kernel_sobel_direccional(nombre[6:]), tamanio)
+    raise ValueError(f"No se reconoce el kernel: {nombre}.")
+
+
+def combinar_kernels(kernel1, kernel2, peso_segundo=0.2):
+    """Combina dos kernels: (1 - peso) * kernel1 + peso * kernel2."""
+    if not 0 <= peso_segundo <= 1:
+        raise ValueError("El peso del segundo kernel debe estar entre 0 y 1.")
+    if kernel1.shape != kernel2.shape:
+        raise ValueError("Los kernels deben tener el mismo tamaño para combinarlos.")
+    return (1 - peso_segundo) * kernel1 + peso_segundo * kernel2
+
+
+def normalizar_resultado(resultado, kernel):
+    """Ajusta una salida a [0,1], centrando en gris los resultados con signo."""
+    if abs(np.sum(kernel)) < 1e-8:
+        maximo = np.max(np.abs(resultado))
+        if maximo == 0:
+            return np.full(resultado.shape, 0.5, dtype=float)
+        return np.clip(resultado / (2 * maximo) + 0.5, 0.0, 1.0)
+    return np.clip(resultado, 0.0, 1.0)
+
+
+def kernel_a_texto(kernel):
+    """Convierte la matriz del kernel en texto para mostrarla en la interfaz."""
+    return "\n".join("  ".join(f"{valor:7.3f}" for valor in fila) for fila in kernel)
+
+
+# ============================================================
+# APLICACIÓN GRÁFICA
+# ============================================================
+
+class AppConvolucion:
     def __init__(self, ventana):
         self.ventana = ventana
-        self.ventana.title(
-            "Procesamiento Digital de Imágenes - TP4 Grupo N°3 ")
-        self.ventana.geometry("1100x910")
-        self.ventana.config(bg="#f0f4f8")
+        self.ventana.title("PDI - Convolución y filtros por kernels")
+        self.ventana.geometry("1320x900")
+        self.ventana.minsize(1080, 720)
+        self.ventana.configure(bg=COLOR_FONDO)
 
-        self.operaciones = [
-            "3x3",
-            "5x5",
-            "7x7"
-        ]
+        self.imagen_original = None
+        self.imagen_entrada = None
+        self.imagen_procesada = None
+        self.foto_entrada = None
+        self.foto_procesada = None
 
-        self.imagen1_data = None
-        self.imagen_procesada_data = None
-
-        # Datos para histogramas
-        self.y_original = None
-        self.y_procesada = None
-
-        # Referencias a los labels inferiores de los histogramas para actualizar textos
-        self.lbl_titulo_hist2 = None
+        self.operacion_var = tk.StringVar(value="Pasa bajos")
+        self.tipo_pasabajo_var = tk.StringVar(value="Plano")
+        self.tamanio_var = tk.StringVar(value="3")
+        self.kernel1_var = tk.StringVar(value="Identidad")
+        self.kernel2_var = tk.StringVar(value="Laplaciano V8")
+        self.peso_var = tk.StringVar(value="0.2")
 
         self.crear_interfaz()
+        self.actualizar_controles()
+        self.actualizar_kernel_preview()
 
     def crear_interfaz(self):
-        # TÍTULO SUPERIOR
-        frame_titulo = tk.Frame(self.ventana, bg="#1e3d59", pady=10)
-        frame_titulo.pack(side="top", fill="x")
+        barra = tk.Frame(self.ventana, bg=COLOR_FONDO)
+        barra.pack(fill="x", padx=16, pady=(12, 7))
 
-        lbl_titulo = tk.Label(
-            frame_titulo,
-            text="Procesamiento Digital de Imágenes - TP4 Grupo N°3",
-            font=("Arial", 16, "bold"),
-            fg="white",
-            bg="#1e3d59"
-        )
-        lbl_titulo.pack()
+        self.crear_boton(barra, "Abrir imagen", self.abrir_imagen, principal=True).pack(side="left", padx=4)
+        self.crear_boton(barra, "Restaurar original", self.restaurar).pack(side="left", padx=4)
+        self.crear_boton(barra, "Usar procesada como entrada", self.usar_procesada).pack(side="left", padx=4)
+        self.crear_boton(barra, "Guardar resultado", self.guardar_resultado).pack(side="left", padx=4)
 
-        # CONTENEDOR PRINCIPAL DE VISUALIZACIÓN
-        frame_principal = tk.Frame(self.ventana, bg="#f0f4f8")
-        frame_principal.pack(fill="both", expand=True, padx=10, pady=10)
+        cuerpo = tk.Frame(self.ventana, bg=COLOR_FONDO)
+        cuerpo.pack(fill="both", expand=True, padx=12, pady=5)
 
-        frame_imgs = tk.Frame(frame_principal, bg="#f0f4f8")
-        frame_imgs.pack(fill="x", pady=5)
+        self.panel_entrada = self.crear_panel_imagen(cuerpo, "IMAGEN DE ENTRADA")
+        self.panel_entrada.pack(side="left", fill="both", expand=True, padx=5)
 
-        self.ANCHO_CAJA = 520
-        self.ALTO_CAJA = 350
-        estilo_marco = {"bg": "white", "bd": 2, "relief": "groove",
-                        "width": self.ANCHO_CAJA, "height": self.ALTO_CAJA}
+        self.crear_panel_controles(cuerpo)
 
-        # --- Imagen 1 ---
-        marco_img1 = tk.Frame(frame_imgs, **estilo_marco)
-        marco_img1.pack(side="left", padx=10)
-        marco_img1.pack_propagate(False)
-        tk.Label(marco_img1, text="Imagen", bg="white", font=(
-            "Arial", 10, "bold"), fg="#333333").pack(side="bottom", fill="x", pady=2)
-        self.label_img1 = tk.Label(
-            marco_img1, text="Sin imagen", bg="#e8edf2", fg="#555555", font=("Arial", 10))
-        self.label_img1.pack(fill="both", expand=True, padx=2, pady=2)
+        self.panel_salida = self.crear_panel_imagen(cuerpo, "IMAGEN RESULTANTE")
+        self.panel_salida.pack(side="left", fill="both", expand=True, padx=5)
 
-        # --- Imagen Procesada ---
-        marco_proc = tk.Frame(frame_imgs, **estilo_marco)
-        marco_proc.pack(side="left", padx=10)
-        marco_proc.pack_propagate(False)
-        tk.Label(marco_proc, text="Procesada", bg="white", font=(
-            "Arial", 10, "bold"), fg="#333333").pack(side="bottom", fill="x", pady=2)
-        self.label_procesada = tk.Label(
-            marco_proc, text="Sin procesar", bg="#e8edf2", fg="#555555", font=("Arial", 10))
-        self.label_procesada.pack(fill="both", expand=True, padx=2, pady=2)
+        self.histogramas = tk.Frame(self.ventana, bg=COLOR_FONDO)
+        self.histogramas.pack(fill="x", padx=17, pady=(2, 5))
+        self.histograma_entrada = self.crear_histograma(self.histogramas, "Histograma · Entrada")
+        self.histograma_entrada.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        self.histograma_salida = self.crear_histograma(self.histogramas, "Histograma · Resultado")
+        self.histograma_salida.pack(side="left", fill="both", expand=True, padx=(6, 0))
 
-        # Fila 2: Secciones de Histogramas
-        frame_hists = tk.Frame(frame_principal, bg="#f0f4f8")
-        frame_hists.pack(fill="x", pady=5)
-
-        # --- Histograma 1 ---
-        marco_hist1 = tk.Frame(frame_hists, **estilo_marco)
-        marco_hist1.pack(side="left", padx=10)
-        marco_hist1.pack_propagate(False)
-        tk.Label(marco_hist1, text="Histograma Y (Original)", bg="white", font=(
-            "Arial", 9, "bold"), fg="#333333").pack(side="bottom", fill="x", pady=2)
-        self.frame_canvas_hist1 = tk.Frame(marco_hist1, bg="white")
-        self.frame_canvas_hist1.pack(fill="both", expand=True, padx=2, pady=2)
-        self.lbl_placeholder_hist1 = tk.Label(
-            self.frame_canvas_hist1, text="Histograma Imagen", bg="#e8edf2", fg="#555555")
-        self.lbl_placeholder_hist1.pack(expand=True, fill="both")
-
-        # --- Histograma 2 ---
-        marco_hist2 = tk.Frame(frame_hists, **estilo_marco)
-        marco_hist2.pack(side="left", padx=10)
-        marco_hist2.pack_propagate(False)
-
-        # Etiqueta inferior dinámica para el histograma procesado
-        self.lbl_titulo_hist2 = tk.Label(
-            marco_hist2, text="Histograma Y(Procesada)", bg="white", font=("Arial", 9, "bold"), fg="#333333")
-        self.lbl_titulo_hist2.pack(side="bottom", fill="x", pady=2)
-
-        self.frame_canvas_hist2 = tk.Frame(marco_hist2, bg="white")
-        self.frame_canvas_hist2.pack(fill="both", expand=True, padx=2, pady=2)
-        self.lbl_placeholder_hist2 = tk.Label(
-            self.frame_canvas_hist2, text="Histograma Procesada", bg="#e8edf2", fg="#555555")
-        self.lbl_placeholder_hist2.pack(expand=True, fill="both")
-
-        # PANEL INFERIOR (CONTROLES Y ACCIONES)
-        frame_controles = tk.Frame(
-            self.ventana, bg="#d8e2dc", pady=10, padx=15)
-        frame_controles.pack(side="bottom", fill="x")
-
-        # Botones de Carga
-        frame_botones_carga = tk.Frame(frame_controles, bg="#d8e2dc")
-        frame_botones_carga.pack(side="left", padx=5)
-
-        btn_cargar1 = tk.Button(
-            frame_botones_carga, text="Cargar Imagen", command=lambda: self.cargar_imagen(1),
-            bg="#438a5e", fg="white", font=("Arial", 10, "bold"), padx=8, pady=4
-        )
-        btn_cargar1.pack(fill="x", pady=2)
-
-        # Menús filtros y kernels
-        frame_menus = tk.Frame(frame_controles, bg="#d8e2dc")
-        frame_menus.pack(side="left", padx=20)
-
-        lbl_operaciones = tk.Label(frame_menus, text="Filtro", bg="#d8e2dc", font=(
-            "Arial", 10, "bold"), fg="#333333")
-        lbl_operaciones.grid(row=0, column=0, padx=5, pady=4, sticky="w")
-
-        self.opcion_filtro = tk.StringVar(value="Pasabajo Llano")
-        operaciones = [
-            "Pasabajo Llano",
-            "Pasabajos Bartlett",
-            "Gaussiano",
-            "Laplaciano",
-            "Sobel",
-            "Mejora",
-            "Pasabanda"
-        ]
-        menu_opciones = tk.OptionMenu(
-            frame_menus, self.opcion_filtro, *operaciones, command=self.verificar_kernel)
-        menu_opciones.config(bg="white", width=14, font=("Arial", 10))
-        menu_opciones.grid(row=0, column=1, padx=5, pady=4, sticky="w")
-
-        # Menús kernel / Control Dinámico
-        frame_menus_kernel = tk.Frame(frame_controles, bg="#d8e2dc")
-        frame_menus_kernel.pack(side="left", padx=20)
-
-        self.lbl_kernel_o_param = tk.Label(frame_menus_kernel, text="Kernel", bg="#d8e2dc", font=(
-            "Arial", 10, "bold"), fg="#333333")
-        self.lbl_kernel_o_param.grid(
-            row=0, column=0, padx=5, pady=4, sticky="w")
-
-        # 1. Menú desplegable tradicional del Kernel
-        self.opcion_kelner = tk.StringVar(value="3x3")
-        self.menu_kernel = tk.OptionMenu(
-            frame_menus_kernel, self.opcion_kelner, *self.operaciones)
-        self.menu_kernel.config(bg="white", width=14, font=("Arial", 10))
-        self.menu_kernel.grid(row=0, column=1, padx=5, pady=4, sticky="w")
-
-        # 2. Barra deslizante (Scale) entre 0 y 1 para el filtro "Nuevo"
-        self.valor_slider = tk.DoubleVar(value=0.0)
-        self.slider_nuevo = tk.Scale(
-            frame_menus_kernel, from_=0.0, to=1.0, resolution=0.01,
-            orient="horizontal", variable=self.valor_slider, bg="white", length=130
-        )
-
-        # Boton procesar
-        btn_procesar = tk.Button(
-            frame_menus_kernel, text="Procesar", command=self.procesar_imagen,
-            bg="#1e3d59", fg="white", font=("Arial", 10, "bold"), padx=12, pady=6
-        )
-        btn_procesar.grid(row=0, column=2, padx=15)
-
-        # Guardar y Salir
-        frame_acciones = tk.Frame(frame_controles, bg="#d8e2dc")
-        frame_acciones.pack(side="right", padx=5)
-
-        btn_guardar = tk.Button(
-            frame_acciones, text="Guardar", command=self.guardar_imagen,
-            bg="#17b978", fg="white", font=("Arial", 10, "bold"), padx=10, pady=4
-        )
-        btn_guardar.pack(side="left", padx=5)
-
-        btn_salir = tk.Button(
-            frame_acciones, text="Salir", command=self.ventana.quit,
-            bg="#ff6e40", fg="white", font=("Arial", 10, "bold"), padx=10, pady=4
-        )
-        btn_salir.pack(side="left", padx=5)
-
-        # BARRA DE ESTADO
         self.estado = tk.Label(
-            self.ventana, text="Listo. Cargue la imagen para comenzar.", bd=1, relief="sunken", anchor="center", bg="#e2e8f0", font=("Arial", 10, "bold")
+            self.ventana, text="Abrí una imagen para comenzar.", anchor="w",
+            bg=COLOR_FONDO, fg=COLOR_SECUNDARIO, font=("Arial", 10)
         )
-        self.estado.pack(side="bottom", fill="x")
+        self.estado.pack(fill="x", padx=19, pady=(2, 10))
 
-    # ========================================================
-    # MÉTODOS DE LA APLICACIÓN
-    # ========================================================
+    def crear_boton(self, padre, texto, comando, principal=False):
+        return tk.Button(
+            padre, text=texto, command=comando,
+            bg=COLOR_PRIMARIO if principal else COLOR_BLANCO,
+            fg=COLOR_BLANCO if principal else COLOR_TEXTO,
+            activebackground=COLOR_HOVER if principal else COLOR_IMAGEN,
+            activeforeground=COLOR_BLANCO if principal else COLOR_TEXTO,
+            font=("Arial", 9, "bold"), padx=9, pady=6,
+            relief="flat" if principal else "solid", bd=0 if principal else 1,
+            cursor="hand2"
+        )
 
-    def cargar_imagen(self, numero):
+    def crear_panel_imagen(self, padre, titulo):
+        panel = tk.Frame(padre, bg=COLOR_PANEL, bd=1, relief="solid")
+        tk.Label(
+            panel, text=titulo, font=("Arial", 11, "bold"),
+            bg=COLOR_PANEL, fg=COLOR_TEXTO
+        ).pack(pady=(10, 6))
+        etiqueta = tk.Label(
+            panel, text="Abrí una imagen para comenzar" if "ENTRADA" in titulo else "El resultado aparecerá aquí",
+            bg=COLOR_IMAGEN, fg=COLOR_SECUNDARIO, font=("Arial", 10)
+        )
+        etiqueta.pack(fill="both", expand=True, padx=9, pady=(0, 9))
+        panel.etiqueta_imagen = etiqueta
+        return panel
+
+    def crear_panel_controles(self, padre):
+        panel = tk.Frame(padre, width=310, bg=COLOR_CONTROLES, bd=1, relief="solid")
+        panel.pack(side="left", fill="y", padx=5)
+        panel.pack_propagate(False)
+        tk.Label(panel, text="CONVOLUCIÓN", font=("Arial", 13, "bold"), bg=COLOR_CONTROLES, fg=COLOR_TEXTO).pack(pady=(12, 8))
+
+        tk.Label(panel, text="Operación:", font=("Arial", 9, "bold"), bg=COLOR_CONTROLES, fg=COLOR_TEXTO).pack(anchor="w", padx=10)
+        operaciones = [
+            "Pasa bajos", "Laplaciano V4", "Laplaciano V8",
+            "Sobel Este", "Sobel Oeste", "Sobel Norte", "Sobel Sur",
+            "Sobel Noreste", "Sobel Noroeste", "Sobel Sureste", "Sobel Suroeste",
+            "Pasa banda (DoG)", "Pasaaltos 0.2", "Pasaaltos 0.4", "Combinar kernels"
+        ]
+        self.combo_operacion = ttk.Combobox(panel, textvariable=self.operacion_var, values=operaciones, state="readonly")
+        self.combo_operacion.pack(fill="x", padx=10, pady=(3, 10))
+        self.combo_operacion.bind("<<ComboboxSelected>>", self.al_cambiar_operacion)
+
+        self.marco_pasabajos = tk.LabelFrame(panel, text="Parámetros del pasa bajos", bg=COLOR_CONTROLES, fg=COLOR_TEXTO, font=("Arial", 9, "bold"))
+        tk.Label(self.marco_pasabajos, text="Tipo de kernel:", bg=COLOR_CONTROLES, fg=COLOR_TEXTO).pack(anchor="w", padx=7, pady=(5, 2))
+        self.combo_tipo = ttk.Combobox(self.marco_pasabajos, textvariable=self.tipo_pasabajo_var, values=["Plano", "Bartlett", "Gaussiano"], state="readonly")
+        self.combo_tipo.pack(fill="x", padx=7)
+        self.combo_tipo.bind("<<ComboboxSelected>>", self.al_cambiar_tipo_pasabajo)
+        tk.Label(self.marco_pasabajos, text="Tamaño:", bg=COLOR_CONTROLES, fg=COLOR_TEXTO).pack(anchor="w", padx=7, pady=(7, 2))
+        self.combo_tamanio = ttk.Combobox(self.marco_pasabajos, textvariable=self.tamanio_var, values=["3", "5", "7"], state="readonly")
+        self.combo_tamanio.pack(fill="x", padx=7, pady=(0, 7))
+        self.combo_tamanio.bind("<<ComboboxSelected>>", self.actualizar_kernel_preview)
+
+        self.marco_combinacion = tk.LabelFrame(panel, text="Combinar kernels", bg=COLOR_CONTROLES, fg=COLOR_TEXTO, font=("Arial", 9, "bold"))
+        opciones_kernels = [
+            "Identidad", "Plano", "Bartlett", "Gaussiano", "Laplaciano V4", "Laplaciano V8",
+            "Sobel Este", "Sobel Oeste", "Sobel Norte", "Sobel Sur",
+            "Sobel Noreste", "Sobel Noroeste", "Sobel Sureste", "Sobel Suroeste"
+        ]
+        tk.Label(self.marco_combinacion, text="Primer kernel:", bg=COLOR_CONTROLES, fg=COLOR_TEXTO).pack(anchor="w", padx=7, pady=(5, 2))
+        self.combo_kernel1 = ttk.Combobox(self.marco_combinacion, textvariable=self.kernel1_var, values=opciones_kernels, state="readonly")
+        self.combo_kernel1.pack(fill="x", padx=7)
+        self.combo_kernel1.bind("<<ComboboxSelected>>", self.actualizar_kernel_preview)
+        tk.Label(self.marco_combinacion, text="Segundo kernel:", bg=COLOR_CONTROLES, fg=COLOR_TEXTO).pack(anchor="w", padx=7, pady=(7, 2))
+        self.combo_kernel2 = ttk.Combobox(self.marco_combinacion, textvariable=self.kernel2_var, values=opciones_kernels, state="readonly")
+        self.combo_kernel2.pack(fill="x", padx=7)
+        self.combo_kernel2.bind("<<ComboboxSelected>>", self.actualizar_kernel_preview)
+        tk.Label(self.marco_combinacion, text="Tamaño común (3, 5 o 7):", bg=COLOR_CONTROLES, fg=COLOR_TEXTO).pack(anchor="w", padx=7, pady=(7, 2))
+        self.combo_tamanio_combinacion = ttk.Combobox(self.marco_combinacion, textvariable=self.tamanio_var, values=["3", "5", "7"], state="readonly")
+        self.combo_tamanio_combinacion.pack(fill="x", padx=7)
+        self.combo_tamanio_combinacion.bind("<<ComboboxSelected>>", self.actualizar_kernel_preview)
+        tk.Label(self.marco_combinacion, text="Peso del segundo kernel (0 a 1):", bg=COLOR_CONTROLES, fg=COLOR_TEXTO).pack(anchor="w", padx=7, pady=(7, 2))
+        self.entrada_peso = tk.Entry(self.marco_combinacion, textvariable=self.peso_var)
+        self.entrada_peso.pack(fill="x", padx=7, pady=(0, 7))
+        self.entrada_peso.bind("<KeyRelease>", self.actualizar_kernel_preview)
+
+        tk.Label(panel, text="Kernel aplicado:", font=("Arial", 9, "bold"), bg=COLOR_CONTROLES, fg=COLOR_TEXTO).pack(anchor="w", padx=10, pady=(8, 2))
+        self.label_kernel = tk.Label(
+            panel, text="", justify="center", anchor="center",
+            font=("Courier New", 9), bg=COLOR_BLANCO, fg=COLOR_TEXTO,
+            bd=1, relief="solid", padx=4, pady=6
+        )
+        self.label_kernel.pack(fill="x", padx=10, pady=(0, 8))
+
+        self.crear_boton(panel, "Procesar imagen", self.procesar, principal=True).pack(fill="x", padx=10, pady=(4, 10))
+       
+    def crear_histograma(self, padre, titulo):
+        panel = tk.LabelFrame(padre, text=titulo, bg=COLOR_PANEL, fg=COLOR_TEXTO, font=("Arial", 9, "bold"), bd=1, relief="solid")
+        canvas = tk.Canvas(panel, height=125, bg=COLOR_BLANCO, highlightthickness=0)
+        canvas.pack(fill="both", expand=True, padx=5, pady=5)
+        canvas.datos_histograma = None
+        canvas.bind("<Configure>", lambda evento, c=canvas: self.dibujar_histograma(c))
+        return panel
+
+    def obtener_canvas_histograma(self, panel):
+        return panel.winfo_children()[0]
+
+    def actualizar_histograma(self, panel, imagen):
+        canvas = self.obtener_canvas_histograma(panel)
+        canvas.datos_histograma = None if imagen is None else rgb_a_luminancia(imagen).ravel()
+        self.dibujar_histograma(canvas)
+
+    def dibujar_histograma(self, canvas):
+        canvas.delete("all")
+        ancho = max(canvas.winfo_width(), 300)
+        alto = max(canvas.winfo_height(), 100)
+        datos = canvas.datos_histograma
+        if datos is None or len(datos) == 0:
+            canvas.create_text(ancho / 2, alto / 2, text="Sin datos", fill=COLOR_SECUNDARIO, font=("Arial", 9))
+            return
+
+        histograma, _ = np.histogram(np.clip(datos, 0, 1), bins=32, range=(0, 1))
+        porcentajes = histograma * 100.0 / len(datos)
+        maximo = max(float(porcentajes.max()), 1.0)
+        margen_izq, margen_der, margen_arriba, margen_abajo = 42, 9, 8, 22
+        grafico_ancho = ancho - margen_izq - margen_der
+        grafico_alto = alto - margen_arriba - margen_abajo
+        base = alto - margen_abajo
+
+        for fraccion in (0, 0.5, 1):
+            y = base - fraccion * grafico_alto
+            canvas.create_line(margen_izq, y, ancho - margen_der, y, fill="#E2E8F0")
+            canvas.create_text(margen_izq - 4, y, text=f"{maximo * fraccion:.1f}%", anchor="e", fill=COLOR_SECUNDARIO, font=("Arial", 7))
+
+        paso = grafico_ancho / len(porcentajes)
+        for indice, porcentaje in enumerate(porcentajes):
+            x0 = margen_izq + indice * paso + 1
+            x1 = margen_izq + (indice + 1) * paso - 1
+            altura = porcentaje / maximo * grafico_alto
+            canvas.create_rectangle(x0, base - altura, x1, base, fill=COLOR_PRIMARIO, outline="")
+
+        for nivel in (0, 64, 128, 192, 255):
+            x = margen_izq + nivel / 255 * grafico_ancho
+            canvas.create_text(x, alto - 10, text=str(nivel), fill=COLOR_SECUNDARIO, font=("Arial", 7))
+
+    def al_cambiar_operacion(self, evento=None):
+        self.actualizar_controles()
+        self.actualizar_kernel_preview()
+
+    def al_cambiar_tipo_pasabajo(self, evento=None):
+        if self.tipo_pasabajo_var.get() == "Gaussiano":
+            valores = ["5", "7"]
+            if self.tamanio_var.get() not in valores:
+                self.tamanio_var.set("5")
+        else:
+            valores = ["3", "5", "7"]
+        self.combo_tamanio.configure(values=valores)
+        self.actualizar_kernel_preview()
+
+    def actualizar_controles(self):
+        self.marco_pasabajos.pack_forget()
+        self.marco_combinacion.pack_forget()
+        operacion = self.operacion_var.get()
+
+        if operacion == "Pasa bajos":
+            self.marco_pasabajos.pack(fill="x", padx=8, pady=(0, 5))
+            if self.tipo_pasabajo_var.get() == "Gaussiano":
+                self.combo_tamanio.configure(values=["5", "7"])
+                if self.tamanio_var.get() not in ("5", "7"):
+                    self.tamanio_var.set("5")
+            else:
+                self.combo_tamanio.configure(values=["3", "5", "7"])
+        elif operacion == "Combinar kernels":
+            self.marco_combinacion.pack(fill="x", padx=8, pady=(0, 5))
+
+    def construir_kernel_seleccionado(self):
+        operacion = self.operacion_var.get()
+        tamanio = int(self.tamanio_var.get())
+
+        if operacion == "Pasa bajos":
+            tipo = self.tipo_pasabajo_var.get()
+            if tipo == "Plano":
+                return kernel_plano(tamanio)
+            if tipo == "Bartlett":
+                return kernel_bartlett(tamanio)
+            return kernel_gaussiano(tamanio)
+        if operacion == "Laplaciano V4":
+            return kernel_laplaciano(4)
+        if operacion == "Laplaciano V8":
+            return kernel_laplaciano(8)
+        if operacion.startswith("Sobel "):
+            return kernel_sobel_direccional(operacion[6:])
+        if operacion == "Pasa banda (DoG)":
+            return kernel_pasabanda()
+        if operacion == "Pasaaltos 0.2":
+            return kernel_pasaaltos(0.2)
+        if operacion == "Pasaaltos 0.4":
+            return kernel_pasaaltos(0.4)
+        if operacion == "Combinar kernels":
+            kernel1 = obtener_kernel(self.kernel1_var.get(), tamanio)
+            kernel2 = obtener_kernel(self.kernel2_var.get(), tamanio)
+            peso = float(self.peso_var.get().replace(",", "."))
+            return combinar_kernels(kernel1, kernel2, peso)
+        raise ValueError("La operación seleccionada no está implementada.")
+
+    def actualizar_kernel_preview(self, evento=None):
+        try:
+            kernel = self.construir_kernel_seleccionado()
+            self.label_kernel.config(text=kernel_a_texto(kernel))
+        except (ValueError, TypeError):
+            self.label_kernel.config(text="Revisá los parámetros")
+
+    def mostrar_imagen(self, etiqueta, imagen):
+        if imagen is None:
+            etiqueta.config(image="", text="Sin imagen")
+            etiqueta.image_ref = None
+            return
+
+        imagen = np.asarray(imagen, dtype=float)
+        if imagen.ndim == 2:
+            imagen = np.stack([imagen, imagen, imagen], axis=2)
+        datos = (np.clip(imagen, 0, 1) * 255).round().astype(np.uint8)
+        imagen_pil = Image.fromarray(datos, mode="RGB")
+        imagen_pil.thumbnail((510, 410), Image.Resampling.LANCZOS)
+        foto = ImageTk.PhotoImage(imagen_pil)
+        etiqueta.config(image=foto, text="")
+        etiqueta.image_ref = foto
+
+    def abrir_imagen(self):
         ruta = filedialog.askopenfilename(
-            title=f"Seleccionar imagen {numero}",
+            title="Seleccionar imagen",
             filetypes=[("Imágenes", "*.jpg *.jpeg *.png *.bmp *.tif *.tiff")]
         )
         if not ruta:
             return
-        imagen_pil = Image.open(ruta).convert("RGB")
-        imagen_array = np.array(imagen_pil) / 255.0
+        try:
+            imagen_pil = Image.open(ruta).convert("RGB")
+            imagen = np.asarray(imagen_pil, dtype=float) / 255.0
+            self.imagen_original = imagen.copy()
+            self.imagen_entrada = imagen.copy()
+            self.imagen_procesada = None
+            self.mostrar_imagen(self.panel_entrada.etiqueta_imagen, self.imagen_entrada)
+            self.mostrar_imagen(self.panel_salida.etiqueta_imagen, None)
+            self.actualizar_histograma(self.histograma_entrada, self.imagen_entrada)
+            self.actualizar_histograma(self.histograma_salida, None)
+            self.estado.config(text=f"Imagen cargada: {imagen.shape[1]} × {imagen.shape[0]} píxeles.", fg=COLOR_SECUNDARIO)
+        except Exception as error:
+            messagebox.showerror("Error al abrir", f"No se pudo abrir la imagen.\n\n{error}")
 
-        self.imagen1_data = imagen_array
-        self.mostrar_imagen_en_label(self.imagen1_data, self.label_img1)
-
-        # Limpiar procesada, su histograma y el histograma de procesada al cargar una nueva imagen
-        self.imagen_procesada_data = None
-        self.label_procesada.config(image="", text="Sin procesar")
-        self.estado.config(text="Imagen cargada correctamente.")
-
-        # Limpiar histograma procesado
-        for widget in self.frame_canvas_hist2.winfo_children():
-            widget.destroy()
-        self.lbl_placeholder_hist2 = tk.Label(
-            self.frame_canvas_hist2, text="histograma procesada", bg="#e8edf2", fg="#555555")
-        self.lbl_placeholder_hist2.pack(expand=True, fill="both")
-
-        # Limpiar también el histograma original
-        for widget in self.frame_canvas_hist1.winfo_children():
-            widget.destroy()
-        self.lbl_placeholder_hist1 = tk.Label(
-            self.frame_canvas_hist1, text="histograma img1", bg="#e8edf2", fg="#555555")
-        self.lbl_placeholder_hist1.pack(expand=True, fill="both")
-
-        self.estado.config(text="Imagen 1 cargada correctamente.")
-
-    def verificar_kernel(self, seleccion):
-        menu = self.menu_kernel["menu"]
-        menu.delete(0, "end")
-
-        if seleccion == "Pasabanda":
-            self.slider_nuevo.grid_remove()
-            self.menu_kernel.grid()
-            self.menu_kernel.config(state="disabled")
-            self.lbl_kernel_o_param.config(text="Kernel")
-
-        elif seleccion == "Mejora":
-            self.menu_kernel.grid_remove()
-            self.slider_nuevo.grid(row=0, column=1, padx=5, pady=4, sticky="w")
-            self.lbl_kernel_o_param.config(text="Valor")
-
-        else:
-            self.slider_nuevo.grid_remove()
-            self.menu_kernel.grid()
-            self.menu_kernel.config(state="normal")
-            self.lbl_kernel_o_param.config(text="Kernel")
-
-            if seleccion == "Laplaciano":
-                operaciones_kernel = ["4vec", "8vec"]
-            elif seleccion == "Sobel":
-                operaciones_kernel = [
-                    "Norte", "Sur", "Este", "Oeste", "Suroeste", "Sureste", "Noroeste", "Noreste"]
-            elif seleccion == "Gaussiano":
-                operaciones_kernel = ["5x5", "7x7"]
-            else:
-                operaciones_kernel = self.operaciones
-
-            self.opcion_kelner.set(operaciones_kernel[0])
-
-            for op in operaciones_kernel:
-                menu.add_command(
-                    label=op, command=lambda v=op: self.opcion_kelner.set(v))
-
-    def mostrar_imagen_en_label(self, array_imagen, label_destino):
-        if array_imagen is None:
+    def procesar(self):
+        if self.imagen_entrada is None:
+            messagebox.showwarning("Atención", "Primero abrí una imagen.")
             return
-        imagen_uint8 = (np.clip(array_imagen, 0, 1) * 255).astype(np.uint8)
-        imagen_pil = Image.fromarray(imagen_uint8)
+        try:
+            kernel = self.construir_kernel_seleccionado()
+            luminancia = rgb_a_luminancia(self.imagen_entrada)
+            valores = convolucion(luminancia, kernel)
+            resultado = normalizar_resultado(valores, kernel)
 
-        imagen_redimensionada = imagen_pil.resize(
-            (self.ANCHO_CAJA - 10, self.ALTO_CAJA - 40), Image.Resampling.LANCZOS)
-        foto = ImageTk.PhotoImage(imagen_redimensionada)
-        label_destino.foto = foto
-        label_destino.config(image=foto, text="")
+            self.imagen_procesada = np.stack([resultado, resultado, resultado], axis=2)
+            self.mostrar_imagen(self.panel_salida.etiqueta_imagen, self.imagen_procesada)
+            self.actualizar_histograma(self.histograma_salida, self.imagen_procesada)
+            self.estado.config(
+                text=f"Filtro aplicado: {self.operacion_var.get()} · kernel {kernel.shape[0]}×{kernel.shape[1]} · salida {resultado.shape[1]}×{resultado.shape[0]}.",
+                fg=COLOR_TEXTO
+            )
+        except (ValueError, TypeError, ZeroDivisionError) as error:
+            messagebox.showerror("Parámetros incorrectos", str(error))
+            self.estado.config(text="No se pudo aplicar el filtro. Revisá los parámetros.", fg="#B91C1C")
 
-    def procesar_imagen(self):
-        if self.imagen1_data is None:
-            messagebox.showwarning(
-                "Atención", "Debe cargar la 'Imagen' para procesar.")
+    def usar_procesada(self):
+        if self.imagen_procesada is None:
+            messagebox.showwarning("Atención", "Primero procesá una imagen.")
             return
+        self.imagen_entrada = self.imagen_procesada.copy()
+        self.imagen_procesada = None
+        self.mostrar_imagen(self.panel_entrada.etiqueta_imagen, self.imagen_entrada)
+        self.mostrar_imagen(self.panel_salida.etiqueta_imagen, None)
+        self.actualizar_histograma(self.histograma_entrada, self.imagen_entrada)
+        self.actualizar_histograma(self.histograma_salida, None)
+        self.estado.config(text="La imagen procesada ahora es la entrada para el siguiente filtro.", fg=COLOR_TEXTO)
 
-        filtro = self.opcion_filtro.get().strip()
-
-        yiq = RGB_2_YIQ(self.imagen1_data)
-        y = yiq[:, :, 0]
-
-        kernel_str = self.opcion_kelner.get().strip()
-
-        # de la Y original le ampliamos dependiendo el kernel ej 3x3 se solo duplica la exterior
-        # en el caso 5x5 las dos ultimas y en 7x7 las tres ultimas.
-        if filtro in ["Pasabajo Llano", "Pasabajos Bartlett", "Gaussiano"]:
-            tam_kernel = int(kernel_str[0])
-            borde = (tam_kernel - 1) // 2
-        elif filtro == "Pasabanda":
-            # Para Pasabanda 5x5 (borde 2)
-            borde = 2
-        else:
-            # Para Laplaciano, Sobel y Mejora usan base 3x3 (borde 1)
-            borde = 1
-
-        y_ampliada = duplicar_bordes(y, borde)
-
-        if filtro == "Mejora":
-            valor_mezcla = self.valor_slider.get()  # Obtenemos el valor del slider aquí
-            resultado = _convolution(y_ampliada, kernel_mejora(valor_mezcla))
-
-        elif filtro == "Sobel":
-            resultado = _convolution(
-                y_ampliada, kernel_direccional(kernel_str))
-        elif filtro == "Pasabanda":
-            resultado = _convolution(y_ampliada, kernel_pasabanda())
-        else:
-            # Para el resto de los filtros (que usan un tamaño numérico)
-            tam_kernel = int(kernel_str[0])
-
-            if filtro == "Pasabajo Llano":
-                resultado = _convolution(
-                    y_ampliada, kernel_pasa_bajo_llano(tam_kernel))
-            elif filtro == "Pasabajos Bartlett":
-                resultado = _convolution(
-                    y_ampliada, kernel_bartlett(tam_kernel))
-            elif filtro == "Gaussiano":
-                resultado = _convolution(
-                    y_ampliada, kernel_gaussiano(tam_kernel))
-            elif filtro == "Laplaciano":
-                resultado = _convolution(
-                    y_ampliada, kernel_laplaciano(tam_kernel))
-
-        self.mostrar_imagen_en_label(y, self.label_img1)
-        self.mostrar_imagen_en_label(resultado, self.label_procesada)
-
-        self.imagen_procesada_data = resultado
-
-        # mensajes
-        if filtro == "Gaussiano":
-            self.estado.config(
-                text=f"Se aplicó el filtro {filtro}.\n"f"Tamaño Y {y.shape}; Filtrada {resultado.shape}.")
-        elif filtro == "Mejora":
-            self.estado.config(
-                text=f"Se aplicó el filtro Mejora con valor de mezcla: {self.valor_slider.get():.2f}. \n"f"Tamaño Y {y.shape}; Filtrada {resultado.shape}.")
-        elif filtro == "Pasabanda":
-            self.estado.config(
-                text=f"Se aplicó el filtro {filtro} con un kernel de tamaño 5x5.\n"f"Tamaño Y {y.shape}; Filtrada {resultado.shape}.")
-        else:
-            self.estado.config(
-                text=f"Se aplicó el filtro {filtro} con un kernel de tamaño {kernel_str}.\n"f"Tamaño Y {y.shape}; Filtrada {resultado.shape}.")
-
-        # Actualizar el texto inferior con el formato "Histograma Y ( Operación )"
-        self.lbl_titulo_hist2.config(text=f"Histograma Y ({filtro})")
-
-        # Llamada a la función externa de histograma modificado
-        dibujar_histograma(resultado, self.frame_canvas_hist2,
-                           "Valor de intensidad (Y')", is_placeholder=False)
-
-        # Llamada a la función externa de histograma
-        dibujar_histograma(y, self.frame_canvas_hist1,
-                           "Valor de intensidad (Y)", is_placeholder=False)
-
-    def guardar_imagen(self):
-        if self.imagen_procesada_data is None:
-            messagebox.showwarning(
-                "Atención", "No hay ninguna imagen procesada para guardar.")
+    def restaurar(self):
+        if self.imagen_original is None:
+            messagebox.showwarning("Atención", "Primero abrí una imagen.")
             return
+        self.imagen_entrada = self.imagen_original.copy()
+        self.imagen_procesada = None
+        self.mostrar_imagen(self.panel_entrada.etiqueta_imagen, self.imagen_entrada)
+        self.mostrar_imagen(self.panel_salida.etiqueta_imagen, None)
+        self.actualizar_histograma(self.histograma_entrada, self.imagen_entrada)
+        self.actualizar_histograma(self.histograma_salida, None)
+        self.estado.config(text="Se restauró la imagen original.", fg=COLOR_TEXTO)
 
+    def guardar_resultado(self):
+        if self.imagen_procesada is None:
+            messagebox.showwarning("Atención", "No hay un resultado para guardar.")
+            return
         ruta = filedialog.asksaveasfilename(
+            title="Guardar imagen resultante",
             defaultextension=".png",
-            filetypes=[("PNG Image", "*.png"),
-                       ("JPEG Image", "*.jpg"), ("All Files", "*.*")]
+            filetypes=[("PNG", "*.png"), ("JPEG", "*.jpg *.jpeg"), ("BMP", "*.bmp")]
         )
         if not ruta:
             return
+        try:
+            datos = (np.clip(self.imagen_procesada, 0, 1) * 255).round().astype(np.uint8)
+            Image.fromarray(datos, mode="RGB").save(ruta)
+            self.estado.config(text=f"Imagen guardada: {ruta}", fg=COLOR_TEXTO)
+        except Exception as error:
+            messagebox.showerror("Error al guardar", f"No se pudo guardar la imagen.\n\n{error}")
 
-        imagen_uint8 = (np.clip(self.imagen_procesada_data,
-                        0, 1) * 255).astype(np.uint8)
-        imagen_pil = Image.fromarray(imagen_uint8)
-        imagen_pil.save(ruta)
-        messagebox.showinfo("Éxito", f"Imagen guardada con éxito en:\n{ruta}")
-        self.estado.config(text=f"Imagen guardada en: {ruta}")
+
+def probar_funciones():
+    """Pruebas básicas rápidas para comprobar formas, límites y casos neutros."""
+    imagen = np.full((9, 11), 0.4, dtype=float)
+    identidad = convolucion(imagen, kernel_identidad(3))
+    assert identidad.shape == imagen.shape
+    assert np.allclose(identidad, imagen)
+
+    for tamanio in (3, 5, 7):
+        for constructor in (kernel_plano, kernel_bartlett, kernel_gaussiano):
+            if constructor is kernel_gaussiano and tamanio == 3:
+                kernel = constructor(3)
+            else:
+                kernel = constructor(tamanio)
+            assert kernel.shape == (tamanio, tamanio)
+            assert np.isclose(kernel.sum(), 1.0)
+            assert convolucion(imagen, kernel).shape == imagen.shape
+
+    for vecinos in (4, 8):
+        assert np.allclose(convolucion(imagen, kernel_laplaciano(vecinos)), 0.0)
+    assert np.allclose(convolucion(imagen, kernel_pasabanda()), 0.0, atol=1e-12)
 
 
 if __name__ == "__main__":
+    probar_funciones()
     ventana = tk.Tk()
-    app = AppTP4(ventana)
+    app = AppConvolucion(ventana)
     ventana.mainloop()
